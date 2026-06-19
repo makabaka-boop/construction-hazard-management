@@ -8,7 +8,6 @@ import commonRouter from './routes/common';
 import './db';
 
 const app = express();
-const PORT = 8031;
 
 app.use(cors());
 app.use(express.json());
@@ -23,6 +22,11 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-app.listen(PORT, () => {
-  console.log(`服务器运行在 http://localhost:${PORT}`);
-});
+if (process.env.NODE_ENV !== 'test') {
+  const PORT = 8031;
+  app.listen(PORT, () => {
+    console.log(`服务器运行在 http://localhost:${PORT}`);
+  });
+}
+
+export default app;
