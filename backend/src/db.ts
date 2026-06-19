@@ -1,14 +1,22 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 
-const dbPath = path.join(__dirname, '..', 'hazard.db');
-const db = new Database(dbPath);
+let db: Database.Database;
 
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+function getDbPath(): string {
+  if (process.env.NODE_ENV === 'test') {
+    return ':memory:';
+  }
+  return path.join(__dirname, '..', 'hazard.db');
+}
 
-function initDatabase() {
-  db.exec(`
+export function initDatabase(customDb?: Database.Database): Database.Database {
+  const database = customDb || new Database(getDbPath());
+
+  database.pragma('journal_mode = WAL');
+  database.pragma('foreign_keys = ON');
+
+  database.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT UNIQUE NOT NULL,
@@ -108,15 +116,15 @@ function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_hazard_status ON hazard_records(status);
   `);
 
-  const columns = db.prepare("PRAGMA table_info(hazard_records)").all() as any[];
+  const columns = database.prepare("PRAGMA table_info(hazard_records)").all() as any[];
   const hasDeadlineDate = columns.some(c => c.name === 'deadline_date');
   if (!hasDeadlineDate) {
-    db.exec("ALTER TABLE hazard_records ADD COLUMN deadline_date TEXT");
+    database.exec("ALTER TABLE hazard_records ADD COLUMN deadline_date TEXT");
   }
 
-  const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number };
+  const userCount = database.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number };
   if (userCount.count === 0) {
-    const insertUser = db.prepare(`
+    const insertUser = database.prepare(`
       INSERT INTO users (username, password, role, name) VALUES (?, ?, ?, ?)
     `);
     insertUser.run('admin', 'admin123', 'admin', '系统管理员');
@@ -125,9 +133,9 @@ function initDatabase() {
     insertUser.run('supervisor', 'super123', 'supervisor', '王监督');
   }
 
-  const projectCount = db.prepare('SELECT COUNT(*) as count FROM projects').get() as { count: number };
+  const projectCount = database.prepare('SELECT COUNT(*) as count FROM projects').get() as { count: number };
   if (projectCount.count === 0) {
-    const insertProject = db.prepare('INSERT INTO projects (name, code) VALUES (?, ?)');
+    const insertProject = database.prepare('INSERT INTO projects (name, code) VALUES (?, ?)');
     const projects = [
       ['城市综合体A区', 'P001'],
       ['科技园区B栋', 'P002'],
@@ -141,7 +149,7 @@ function initDatabase() {
       projectIds.push(Number(result.lastInsertRowid));
     });
 
-    const insertFloor = db.prepare('INSERT INTO floors (project_id, name, code) VALUES (?, ?, ?)');
+    const insertFloor = database.prepare('INSERT INTO floors (project_id, name, code) VALUES (?, ?, ?)');
     const floorIds: number[] = [];
     projectIds.forEach((pid, idx) => {
       for (let i = 1; i <= 10; i++) {
@@ -150,7 +158,7 @@ function initDatabase() {
       }
     });
 
-    const insertArea = db.prepare('INSERT INTO areas (floor_id, name, code) VALUES (?, ?, ?)');
+    const insertArea = database.prepare('INSERT INTO areas (floor_id, name, code) VALUES (?, ?, ?)');
     const areaNames = ['东区', '西区', '南区', '北区', '中庭', '楼梯间', '电梯厅', '设备间'];
     floorIds.forEach((fid) => {
       areaNames.forEach((name, idx) => {
@@ -158,7 +166,7 @@ function initDatabase() {
       });
     });
 
-    const insertHazardType = db.prepare('INSERT INTO hazard_types (parent_id, name, code) VALUES (?, ?, ?)');
+    const insertHazardType = database.prepare('INSERT INTO hazard_types (parent_id, name, code) VALUES (?, ?, ?)');
     const hazardCategories = [
       { name: '安全防护', code: 'HT01', children: ['临边防护', '洞口防护', '安全帽', '安全带', '安全网'] },
       { name: '临时用电', code: 'HT02', children: ['配电箱', '线缆敷设', '接地保护', '漏电保护', '照明设施'] },
@@ -174,7 +182,7 @@ function initDatabase() {
       });
     });
 
-    const insertGroup = db.prepare('INSERT INTO responsibility_groups (name, leader, phone) VALUES (?, ?, ?)');
+    const insertGroup = database.prepare('INSERT INTO responsibility_groups (name, leader, phone) VALUES (?, ?, ?)');
     const groups = [
       ['土建一组', '李组长', '13800138001'],
       ['土建二组', '王组长', '13800138002'],
@@ -189,7 +197,7 @@ function initDatabase() {
       insertGroup.run(name, leader, phone);
     });
 
-    const insertHazard = db.prepare(`
+    const insertHazard = database.prepare(`
       INSERT INTO hazard_records 
       (project_id, floor_id, area_id, hazard_type_id, group_id, description, status, executor_id, deadline_date)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -219,7 +227,7 @@ function initDatabase() {
       );
     }
 
-    const insertDeadlineRule = db.prepare(`
+    const insertDeadlineRule = database.prepare(`
       INSERT OR IGNORE INTO rectification_deadline_rules 
       (hazard_type_parent_id, default_days)
       VALUES (?, ?)
@@ -235,8 +243,18 @@ function initDatabase() {
       insertDeadlineRule.run(parentId, days);
     });
   }
+
+  return database;
 }
 
-initDatabase();
+export function setDatabase(customDb: Database.Database): void {
+  db = customDb;
+}
+
+if (process.env.NODE_ENV !== 'test') {
+  db = initDatabase();
+} else {
+  db = new Database(':memory:');
+}
 
 export default db;
