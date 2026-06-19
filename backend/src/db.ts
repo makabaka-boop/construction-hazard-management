@@ -1,13 +1,49 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 
-const dbPath = path.join(__dirname, '..', 'hazard.db');
-const db = new Database(dbPath);
+let db: Database.Database | null = null;
 
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+export function getDb(): Database.Database {
+  if (!db) {
+    initDb();
+  }
+  return db!;
+}
 
-function initDatabase() {
+export function setDb(customDb: Database.Database) {
+  db = customDb;
+}
+
+export function resetDb() {
+  if (db) {
+    db.close();
+  }
+  db = null;
+}
+
+function initDb() {
+  const isTest = process.env.NODE_ENV === 'test';
+  
+  if (isTest) {
+    db = new Database(':memory:');
+  } else {
+    const dbPath = path.join(__dirname, '..', 'hazard.db');
+    db = new Database(dbPath);
+  }
+  
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
+  initSchema();
+  if (isTest) {
+    seedTestData();
+  } else {
+    seedInitialData();
+  }
+}
+
+function initSchema() {
+  if (!db) return;
+  
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -107,12 +143,10 @@ function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_hazard_group ON hazard_records(group_id);
     CREATE INDEX IF NOT EXISTS idx_hazard_status ON hazard_records(status);
   `);
+}
 
-  const columns = db.prepare("PRAGMA table_info(hazard_records)").all() as any[];
-  const hasDeadlineDate = columns.some(c => c.name === 'deadline_date');
-  if (!hasDeadlineDate) {
-    db.exec("ALTER TABLE hazard_records ADD COLUMN deadline_date TEXT");
-  }
+export function seedInitialData() {
+  if (!db) return;
 
   const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number };
   if (userCount.count === 0) {
@@ -143,7 +177,7 @@ function initDatabase() {
 
     const insertFloor = db.prepare('INSERT INTO floors (project_id, name, code) VALUES (?, ?, ?)');
     const floorIds: number[] = [];
-    projectIds.forEach((pid, idx) => {
+    projectIds.forEach((pid) => {
       for (let i = 1; i <= 10; i++) {
         const result = insertFloor.run(pid, `${i}层`, `F${String(i).padStart(2, '0')}`);
         floorIds.push(Number(result.lastInsertRowid));
@@ -237,6 +271,94 @@ function initDatabase() {
   }
 }
 
-initDatabase();
+export function seedTestData() {
+  if (!db) return;
 
-export default db;
+  db.exec('DELETE FROM hazard_records');
+  db.exec('DELETE FROM rectification_deadline_rules');
+  db.exec('DELETE FROM responsibility_groups');
+  db.exec('DELETE FROM hazard_types');
+  db.exec('DELETE FROM areas');
+  db.exec('DELETE FROM floors');
+  db.exec('DELETE FROM projects');
+  db.exec('DELETE FROM users');
+  db.exec("DELETE FROM sqlite_sequence WHERE name IN ('users', 'projects', 'floors', 'areas', 'hazard_types', 'responsibility_groups', 'hazard_records', 'rectification_deadline_rules')");
+
+  const insertUser = db.prepare(`
+    INSERT INTO users (username, password, role, name) VALUES (?, ?, ?, ?)
+  `);
+  insertUser.run('admin', 'admin123', 'admin', '系统管理员');
+  insertUser.run('executor', 'exec123', 'executor', '张三');
+  insertUser.run('executor2', 'exec123', 'executor', '李四');
+  insertUser.run('supervisor', 'super123', 'supervisor', '王监督');
+
+  const insertProject = db.prepare('INSERT INTO projects (name, code) VALUES (?, ?)');
+  insertProject.run('测试项目A', 'TEST001');
+  insertProject.run('测试项目B', 'TEST002');
+
+  const insertFloor = db.prepare('INSERT INTO floors (project_id, name, code) VALUES (?, ?, ?)');
+  insertFloor.run(1, '1层', 'F01');
+  insertFloor.run(1, '2层', 'F02');
+  insertFloor.run(2, '1层', 'F01');
+
+  const insertArea = db.prepare('INSERT INTO areas (floor_id, name, code) VALUES (?, ?, ?)');
+  insertArea.run(1, '东区', 'A01');
+  insertArea.run(1, '西区', 'A02');
+  insertArea.run(2, '东区', 'A01');
+
+  const insertHazardType = db.prepare('INSERT INTO hazard_types (parent_id, name, code) VALUES (?, ?, ?)');
+  insertHazardType.run(null, '安全防护', 'HT01');
+  insertHazardType.run(1, '临边防护', 'HT01-01');
+  insertHazardType.run(1, '洞口防护', 'HT01-02');
+  insertHazardType.run(null, '临时用电', 'HT02');
+  insertHazardType.run(4, '配电箱', 'HT02-01');
+
+  const insertGroup = db.prepare('INSERT INTO responsibility_groups (name, leader, phone) VALUES (?, ?, ?)');
+  insertGroup.run('测试班组1', '李组长', '13800138001');
+  insertGroup.run('测试班组2', '王组长', '13800138002');
+
+  const insertHazard = db.prepare(`
+    INSERT INTO hazard_records 
+    (project_id, floor_id, area_id, hazard_type_id, group_id, description, status, executor_id, deadline_date)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const today = new Date();
+  const futureDate = new Date(today);
+  futureDate.setDate(today.getDate() + 10);
+  const nearDate = new Date(today);
+  nearDate.setDate(today.getDate() + 2);
+  const pastDate = new Date(today);
+  pastDate.setDate(today.getDate() - 5);
+
+  insertHazard.run(1, 1, 1, 2, 1, '测试隐患1：待整改正常项', 'pending', 2, futureDate.toISOString().slice(0, 10));
+  insertHazard.run(1, 1, 2, 2, 1, '测试隐患2：已超期项', 'pending', 2, pastDate.toISOString().slice(0, 10));
+  insertHazard.run(1, 2, 1, 5, 2, '测试隐患3：整改中项', 'rectifying', 2, futureDate.toISOString().slice(0, 10));
+  insertHazard.run(2, 3, 3, 2, 1, '测试隐患4：执行人2的待整改', 'pending', 3, futureDate.toISOString().slice(0, 10));
+  insertHazard.run(1, 1, 1, 2, 1, '测试隐患5：即将到期项', 'pending', 2, nearDate.toISOString().slice(0, 10));
+
+  const insertDeadlineRule = db.prepare(`
+    INSERT INTO rectification_deadline_rules 
+    (hazard_type_parent_id, default_days)
+    VALUES (?, ?)
+  `);
+  insertDeadlineRule.run(1, 7);
+  insertDeadlineRule.run(4, 5);
+}
+
+const dbProxy = new Proxy({} as Database.Database, {
+  get(target, prop) {
+    const dbInstance = getDb();
+    const value = (dbInstance as any)[prop];
+    if (typeof value === 'function') {
+      return value.bind(dbInstance);
+    }
+    return value;
+  },
+});
+
+export default dbProxy;
+
+if (process.env.NODE_ENV !== 'test') {
+  getDb();
+}
