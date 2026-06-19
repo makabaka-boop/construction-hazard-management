@@ -1,3 +1,4 @@
+/// <reference types="vitest" />
 import { defineConfig } from 'vite';
 
 export default defineConfig({
@@ -12,5 +13,13 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist'
+  },
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    include: ['tests/**/*.test.ts'],
+    setupFiles: ['tests/setup.ts'],
+    clearMocks: true,
+    restoreMocks: true,
   }
 });
